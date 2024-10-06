@@ -60,6 +60,8 @@ class LiteClient:
                  tl_schemas_path: typing.Optional[str] = None,
                  trust_level: int = 1,
                  init_key_block: BlockIdExt = None,
+                 auto_update_shard_blocks = True,
+                 auto_update_mc_blocks = True
                  ) -> None:
         """
         ADNL over TCP client for `liteservers` usage
@@ -79,6 +81,8 @@ class LiteClient:
         self.init_key_block: BlockIdExt = init_key_block
         if not self.trust_level and not init_key_block:
             raise LiteClientError('trust level is zero but no init block provided')
+        self.auto_update_shard_blocks = auto_update_shard_blocks
+        self.auto_update_mc_blocks = auto_update_mc_blocks
 
         """########### crypto ###########"""
         self.server = Server(host, port, base64.b64decode(server_pub_key))
@@ -189,7 +193,10 @@ class LiteClient:
         self.listener = asyncio.create_task(self.listen())
         await self.update_last_blocks()
         self.pinger = asyncio.create_task(self.ping())
-        self.updater = asyncio.create_task(self.block_updater())
+        if self.auto_update_mc_blocks:
+            self.updater = asyncio.create_task(self.block_updater())
+        else:
+            self.updater = None
         await future
         self.inited = True
 
@@ -199,6 +206,8 @@ class LiteClient:
 
     async def close(self) -> None:
         for i in [self.pinger, self.updater, self.listener]:
+            if i is None:
+                continue
             if i.done() and not i.cancelled():
                 i.exception()
             i.cancel()
@@ -297,8 +306,11 @@ class LiteClient:
             kwargs['file_hash'] = kwargs['file_hash'].hex()
         return {'id': {'workchain': kwargs['wc'], 'shard': kwargs['shard'], 'seqno': kwargs['seqno'], 'root_hash': kwargs['root_hash'], 'file_hash': kwargs['file_hash']}}
 
-    async def get_trusted_last_mc_block(self):
-        last_block = BlockIdExt.from_dict((await self.get_masterchain_info())['last'])
+    async def get_trusted_last_mc_block(self, untrusted_mc_block_hint: typing.Optional[BlockIdExt] = None):
+        if untrusted_mc_block_hint is None:
+            last_block = BlockIdExt.from_dict((await self.get_masterchain_info())['last'])
+        else:
+            last_block = untrusted_mc_block_hint
         if self.trust_level:
             return last_block
         if not self.last_key_block:
@@ -306,8 +318,8 @@ class LiteClient:
         await self.get_mc_block_proof(known_block=self.last_key_block, target_block=last_block)
         return last_block
 
-    async def update_last_blocks(self):
-        self.last_mc_block = await self.get_trusted_last_mc_block()
+    async def update_last_blocks(self, untrusted_mc_block_hint: typing.Optional[BlockIdExt] = None):
+        self.last_mc_block = await self.get_trusted_last_mc_block(untrusted_mc_block_hint)
         shards = await self.raw_get_all_shards_info(self.last_mc_block)
         shard_result = {}
         for k, v in shards.items():
@@ -322,10 +334,13 @@ class LiteClient:
             self.last_mc_block = await self.get_trusted_last_mc_block()
         while True:
             try:
-                await self.wait_masterchain_seqno(self.last_mc_block.seqno + 1, timeout_ms=10000, schema_name='getMasterchainInfo', data={})
+                untrusted_mc_block_hint = BlockIdExt.from_dict((await self.wait_masterchain_seqno(self.last_mc_block.seqno + 1, timeout_ms=10000, schema_name='getMasterchainInfo', data={}))['last'])
             except asyncio.TimeoutError:
                 continue
-            await self.update_last_blocks()
+            if self.auto_update_shard_blocks:
+                await self.update_last_blocks(untrusted_mc_block_hint)
+            else:
+                self.last_mc_block = await self.get_trusted_last_mc_block(untrusted_mc_block_hint)
 
     async def get_masterchain_info(self):
         return await self.liteserver_request('getMasterchainInfo', {})
