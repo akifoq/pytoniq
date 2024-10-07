@@ -60,8 +60,8 @@ class LiteClient:
                  tl_schemas_path: typing.Optional[str] = None,
                  trust_level: int = 1,
                  init_key_block: BlockIdExt = None,
-                 auto_update_shard_blocks = True,
-                 auto_update_mc_blocks = True
+                 auto_update_shard_blocks: bool = True,
+                 auto_update_mc_blocks: bool = True
                  ) -> None:
         """
         ADNL over TCP client for `liteservers` usage
@@ -81,8 +81,9 @@ class LiteClient:
         self.init_key_block: BlockIdExt = init_key_block
         if not self.trust_level and not init_key_block:
             raise LiteClientError('trust level is zero but no init block provided')
-        self.auto_update_shard_blocks = auto_update_shard_blocks
-        self.auto_update_mc_blocks = auto_update_mc_blocks
+        self.auto_update_shard_blocks: bool = auto_update_shard_blocks
+        self.auto_update_mc_blocks: bool = auto_update_mc_blocks
+        self.new_mc_block_found: asyncio.Event = asyncio.Event()
 
         """########### crypto ###########"""
         self.server = Server(host, port, base64.b64decode(server_pub_key))
@@ -191,9 +192,9 @@ class LiteClient:
         self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.server.host, self.server.port), self.timeout)
         future = await asyncio.wait_for(self.send(handshake, None), self.timeout)
         self.listener = asyncio.create_task(self.listen())
-        await self.update_last_blocks()
         self.pinger = asyncio.create_task(self.ping())
         if self.auto_update_mc_blocks:
+            await self.update_last_blocks()
             self.updater = asyncio.create_task(self.block_updater())
         else:
             self.updater = None
@@ -341,6 +342,7 @@ class LiteClient:
                 await self.update_last_blocks(untrusted_mc_block_hint)
             else:
                 self.last_mc_block = await self.get_trusted_last_mc_block(untrusted_mc_block_hint)
+            self.new_mc_block_found.set()
 
     async def get_masterchain_info(self):
         return await self.liteserver_request('getMasterchainInfo', {})
