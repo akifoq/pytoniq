@@ -49,6 +49,21 @@ class RunGetMethodError(LiteClientError):
         self.exit_code = exit_code
         super().__init__(f'Get method "{method}" for account {address} returned exit code {exit_code}')
 
+async def retry_lc_request(request_sender: typing.Callable[[], typing.Awaitable], 
+                           max_retry_attempts: int, 
+                           retry_delay: float,
+                           logger: typing.Optional[logging.Logger] = None):
+    while True:
+        try:
+            return (await request_sender())
+        except (ConnectionRefusedError, asyncio.TimeoutError, LiteServerError) as e:
+            max_retry_attempts -= 1
+            if max_retry_attempts < 0:
+                raise
+            if logger is not None:
+                logger.warning(msg=f'got error: {e}, retrying')
+            await asyncio.sleep(retry_delay)
+
 
 class LiteClient:
 
@@ -61,7 +76,8 @@ class LiteClient:
                  trust_level: int = 1,
                  init_key_block: BlockIdExt = None,
                  auto_update_shard_blocks: bool = True,
-                 auto_update_mc_blocks: bool = True
+                 auto_update_mc_blocks: bool = True,
+                 max_retry_attempts: int = 0 # number of retry attempts for sending a request if an error occurs
                  ) -> None:
         """
         ADNL over TCP client for `liteservers` usage
@@ -72,6 +88,8 @@ class LiteClient:
         self.inited = False
         self.logger = logging.getLogger(self.__class__.__name__)
         self.timeout = timeout
+        self.max_retry_attempts = max_retry_attempts
+        self.retry_delay = 0.2
 
         """########### sync ###########"""
         self.last_mc_block: BlockIdExt = None
@@ -189,7 +207,10 @@ class LiteClient:
             raise LiteClientError('The client is already connected')
         self.loop = asyncio.get_running_loop()
         handshake = self.handshake()
-        self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.server.host, self.server.port), self.timeout)
+        self.reader, self.writer = await retry_lc_request(
+            lambda: asyncio.wait_for(asyncio.open_connection(self.server.host, self.server.port), self.timeout),
+            self.max_retry_attempts, self.retry_delay, self.logger
+        )
         future = await asyncio.wait_for(self.send(handshake, None), self.timeout)
         self.listener = asyncio.create_task(self.listen())
         self.pinger = asyncio.create_task(self.ping())
@@ -292,10 +313,12 @@ class LiteClient:
         return resp.result()
 
     async def liteserver_request(self, tl_schema_name: str, data: dict) -> dict:
-        schema = self.schemas.get_by_name('liteServer.' + tl_schema_name)
-        self.logger.info(msg=f'requesting {tl_schema_name} with provided data {data}')
-        data, qid = self.serialize_adnl_ls_query(schema, data)
-        return await self.liteserver_query(data, qid)
+        async def impl():
+            schema = self.schemas.get_by_name('liteServer.' + tl_schema_name)
+            self.logger.info(msg=f'requesting {tl_schema_name} with provided data {data}')
+            sdata, qid = self.serialize_adnl_ls_query(schema, data)
+            return await self.liteserver_query(sdata, qid)
+        return await retry_lc_request(impl, self.max_retry_attempts, self.retry_delay, self.logger)
 
     @staticmethod
     def pack_block_id_ext(**kwargs):
