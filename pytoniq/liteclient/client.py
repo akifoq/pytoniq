@@ -57,6 +57,9 @@ async def retry_lc_request(request_sender: typing.Callable[[], typing.Awaitable]
         try:
             return (await request_sender())
         except (ConnectionRefusedError, asyncio.TimeoutError, LiteServerError) as e:
+            if isinstance(e, LiteServerError):
+                if "External message was not accepted" in e.message:
+                    raise # don't retry rejected messages
             max_retry_attempts -= 1
             if max_retry_attempts < 0:
                 raise
