@@ -64,7 +64,7 @@ async def retry_lc_request(request_sender: typing.Callable[[], typing.Awaitable]
             if max_retry_attempts < 0:
                 raise
             if logger is not None:
-                logger.warning(msg=f'got error: {e}, retrying')
+                logger.warning(msg=f'got error: {repr(e)}, retrying (remaining {max_retry_attempts} attempts)')
             await asyncio.sleep(retry_delay)
 
 
