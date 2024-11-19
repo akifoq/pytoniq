@@ -638,11 +638,9 @@ class LiteClient:
         # set libs
         libs = []
         self._find_libs(account.account.storage.state.state_init.code, libs)
-        libs = [i for i in libs if i.hex() not in self.libs]
-        if libs:
-            self.libs |= await self.get_libraries(libs)
+        libs = await self.get_libraries(libs)
 
-        if libs and self.libs:
+        if libs:
             def value_serializer(dest: Builder, src: Cell):
                 if src is not None:
                     dest.store_uint(0, 2).store_ref(src).store_maybe_ref(None)
@@ -1088,10 +1086,9 @@ class LiteClient:
         state_proof = Cell.one_from_boc(result['state_proof'])
         return self.unpack_config(blk, config_proof, state_proof)
 
-    async def _get_libraries(self, library_list: typing.List[typing.Union[bytes, str]]) -> typing.Dict[str, typing.Optional[Cell]]:
+    async def _get_libraries(self, library_list: list[str]) -> typing.Dict[str, typing.Optional[Cell]]:
         if len(library_list) > 16:
             raise LiteClientError('maximum libraries num could be requested is 16')
-        library_list = [lib.hex() if isinstance(lib, bytes) else lib for lib in library_list]
         data = {'library_list': library_list}
 
         result = await self.liteserver_request('getLibraries', data)
@@ -1116,9 +1113,13 @@ class LiteClient:
         :param library_list: list of library hashes in bytes or string hex form
         :return: dict {library_hash_hex: library Cell or None if library not found}
         """
-        libs = [library_list[i:i + 16] for i in range(0, len(library_list), 16)]  # split libs into 16-element chunks
-        result = await asyncio.gather(*[self._get_libraries(lib) for lib in libs])
-        return {k: v for d in result for k, v in d.items()}
+        library_list: list[str] = [lib.hex() if isinstance(lib, bytes) else lib for lib in library_list]
+        to_load = [lib for lib in library_list if lib not in self.libs]
+        if len(to_load) > 0:
+            libs = [to_load[i:i + 16] for i in range(0, len(to_load), 16)]  # split libs into 16-element chunks
+            result = await asyncio.gather(*[self._get_libraries(lib) for lib in libs])
+            self.libs |= {k: v for d in result for k, v in d.items()}
+        return {lib: self.libs[lib] for lib in library_list}
 
     async def get_out_msg_queue_sizes(self, wc: int = None, shard: int = None):
         """
