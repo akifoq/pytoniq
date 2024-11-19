@@ -585,7 +585,7 @@ class LiteClient:
     @staticmethod
     def _find_libs(cell: Cell, libs: list):
         if cell.type_ == 2:
-            libs.append(cell.begin_parse().preload_bytes(32))
+            libs.append(cell.begin_parse().skip_bits(8).preload_bytes(32))
             return True
         res = False
         for ref in cell.refs:  # trick to avoid copying, don't repeat this at home
