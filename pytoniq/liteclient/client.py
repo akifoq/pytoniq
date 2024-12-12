@@ -145,11 +145,7 @@ class LiteClient:
         return aes_ctr_decrypt(self.dec_sipher, data)
 
     async def _drain(self):
-        try:
-            await self.writer.drain()
-        except ConnectionError:
-            await self.close()
-            raise
+        await self.writer.drain()
 
     async def send(self, data: bytes, qid: typing.Union[str, int, None]) -> asyncio.Future:
         future = self.loop.create_future()
@@ -166,11 +162,7 @@ class LiteClient:
         return future
 
     async def receive(self, data_len: int) -> bytes:
-        try:
-            data = await self.reader.readexactly(data_len)
-        except ConnectionError:
-            await self.close()
-            raise
+        data = await self.reader.readexactly(data_len)
         return data
 
     async def receive_and_decrypt(self, data_len: int) -> bytes:
